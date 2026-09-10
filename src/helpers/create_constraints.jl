@@ -256,6 +256,9 @@ function _get_substitutions(PEinfo, arguments)
         flag = cvfixed[length(_get_cvfixed_ids(PEinfo)) + q]
         rules[term] = flag * a + (1 - flag) * b
     end
+    for term in _get_ifelse_terms(sys)
+        haskey(rules, term) || (rules[term] = _get_maxmin(term))
+    end
     for (uidx, id) in enumerate(_get_u_ids(PEinfo))
         haskey(key, id) || throw(ArgumentError("event target '$id' is not a model parameter, which is not supported"))
         rules[key[id]] = u[uidx]
@@ -311,9 +314,7 @@ function _get_cvfixed(PEinfo, conditions)
     cvfixed_ids = _get_cvfixed_ids(PEinfo)
     cvfixed = Matrix{Float64}(undef, length(cvfixed_ids), length(conditions))
     for (cidx, condition) in enumerate(conditions), (cvfixedidx, id) in enumerate(cvfixed_ids)
-        i = findfirst(==(id), condition.target_ids)
-        isnothing(i) && throw(ArgumentError("condition '$(condition.condition_id)' leaves '$id' unset"))
-        cvfixed[cvfixedidx,cidx] = condition.target_values[i]
+        cvfixed[cvfixedidx,cidx] = _get_condition_value(PEinfo, condition, id)
     end
     key = Dict(_get_id(symbol) => symbol for symbol in MTK.parameters(PEinfo.model.sys))
     flags = Matrix{Float64}(undef, length(_get_ifelses(PEinfo)), length(conditions))
@@ -327,9 +328,33 @@ end
 # ifelse terms of the right-hand sides whose condition reads only cvfixed values, each a flag row of cvfixed
 function _get_ifelses(PEinfo)
     cvfixed_ids = _get_cvfixed_ids(PEinfo)
+    return filter(
+        term -> all(
+            v -> _get_id(v) in cvfixed_ids, Symbolics.get_variables(Symbolics.arguments(term)[1])
+        ), 
+        _get_ifelse_terms(PEinfo.model.sys)
+    )
+end
+
+
+function _get_ifelse_terms(sys)
     isifelse(x) = Symbolics.iscall(x) && Symbolics.operation(x) === ifelse
-    terms = unique([term for equation in MTK.equations(PEinfo.model.sys) for term in Symbolics.filterchildren(isifelse, equation.rhs)])
-    return filter(term -> all(v -> _get_id(v) in cvfixed_ids, Symbolics.get_variables(Symbolics.arguments(term)[1])), terms)
+    return unique(
+        [
+            term for equation in MTK.equations(sys) for term in Symbolics.filterchildren(isifelse, equation.rhs)
+        ]
+    )
+end
+
+function _get_maxmin(term)
+    condition, x, y = Symbolics.arguments(term)
+    op, (a, b) = Symbolics.operation(condition), Symbolics.arguments(condition)
+    op in (<, <=, >, >=) || throw(ArgumentError("ifelse '$term' is not supported"))
+    op in (>, >=) && ((a, b) = (b, a))
+    iszero_simplified(expr) = (value = SymbolicUtils.unwrap_const(Symbolics.simplify(expr)); value isa Number && iszero(value))
+    iszero_simplified(x - y - (b - a)) && return max(x, y)
+    iszero_simplified(x - y - (a - b)) && return min(x, y)
+    throw(ArgumentError("ifelse '$term' is not a max or min, which is not supported"))
 end
 
 # u[uidx,cidx,i]: value of event target u_ids[uidx] on interval i of condition cidx
@@ -339,7 +364,10 @@ function _get_u(PEinfo)
     u = Array{Float64, 3}(undef, length(u_ids), Nc, N)
     for cidx in 1:Nc, i in 1:N, (uidx, id) in enumerate(u_ids)
         times, t = PEinfo.event_times[:,cidx], PEinfo.nodes[cidx][i]
-        u[uidx,cidx,i] = something(_get_u_value(PEinfo, id, times, t), _get_default(PEinfo.model, id))
+        u[uidx,cidx,i] = something(
+            _get_u_value(PEinfo, id, times, t), 
+            _get_u_start(PEinfo, PEinfo.conditions[cidx], id)
+        )
     end
     return u
 end

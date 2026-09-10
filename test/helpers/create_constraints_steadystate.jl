@@ -12,7 +12,10 @@
         cvfixed = EMP._get_cvfixed(PEinfo, PEinfo.preeq_conditions)
         times = EMP._get_event_times(PEinfo.events, PEinfo.preeq_conditions, PEinfo.parameters, PEinfo.model.parametermap)
         u = [
-            something(EMP._get_u_value(PEinfo, id, times[:,ssidx], Inf), EMP._get_default(PEinfo.model, id))
+            something(
+                EMP._get_u_value(PEinfo, id, times[:,ssidx], Inf),
+                EMP._get_u_start(PEinfo, PEinfo.preeq_conditions[ssidx], id)
+            )
             for id in EMP._get_u_ids(PEinfo), ssidx in 1:Nss
         ]
         W, b, keep_rows = EMP._get_conservation_laws(PEinfo, cvfixed, u)

@@ -10,7 +10,8 @@ function _create_constraints_steadystate(
     return core
 end
 
-# Create steady-state constraints f(zss) = 0 and conservation constraints W zss = W z(t=0) for every pre-equilibration condition
+# Create steady-state constraints f(zss) = 0 
+# and conservation constraints W zss = W z(t=0) for every pre-equilibration condition
 function _create_zss_constraints(
         core::ExaCore,
         PEinfo::PEtabInfo
@@ -25,7 +26,10 @@ function _create_zss_constraints(
     cvfixed = _get_cvfixed(PEinfo, PEinfo.preeq_conditions)
     times = _get_event_times(PEinfo.events, PEinfo.preeq_conditions, PEinfo.parameters, PEinfo.model.parametermap)
     u = [
-        something(_get_u_value(PEinfo, id, times[:,ssidx], Inf), _get_default(PEinfo.model, id))
+        something(
+            _get_u_value(PEinfo, id, times[:,ssidx], Inf),
+            _get_u_start(PEinfo, PEinfo.preeq_conditions[ssidx], id)
+        )
         for id in _get_u_ids(PEinfo), ssidx in 1:_get_Nss(PEinfo)
     ]
     itr = [
@@ -71,7 +75,10 @@ end
 function _get_dfdz(PEinfo)
     arguments = _get_arguments(PEinfo)
     rules = _get_substitutions(PEinfo, arguments)
-    rhs = [Symbolics.fixpoint_sub(equation.rhs, rules; fold = Val(true)) for equation in MTK.equations(PEinfo.model.sys)]
+    rhs = [
+        Symbolics.fixpoint_sub(equation.rhs, rules; fold = Val(true)) 
+        for equation in MTK.equations(PEinfo.model.sys)
+    ]
     return Symbolics.build_function(
         Symbolics.jacobian(rhs, collect(arguments.z)),
         arguments...;
@@ -82,9 +89,17 @@ end
 
 # z(t=0) of the pre-equilibration condition with targets cvfixed_s, a number for every state
 function _get_zic(arguments, zic_sym, cvfixed_s)
-    rules = Dict(arguments.cvfixed[cvfixedidx] => value for (cvfixedidx, value) in enumerate(cvfixed_s))
-    zic = [Symbolics.value(Symbolics.substitute(expr, rules)) for expr in zic_sym]
-    all(value -> value isa Number, zic) || throw(ArgumentError("pre-equilibration initial state depends on theta, which is not supported"))
+    rules = Dict(
+        arguments.cvfixed[cvfixedidx] => value 
+        for (cvfixedidx, value) in enumerate(cvfixed_s)
+    )
+    zic = [
+        Symbolics.value(Symbolics.substitute(expr, rules)) 
+        for expr in zic_sym
+    ]
+    all(value -> value isa Number, zic) || throw(
+        ArgumentError("pre-equilibration initial state depends on theta, which is not supported")
+    )
     return Float64.(zic)
 end
 

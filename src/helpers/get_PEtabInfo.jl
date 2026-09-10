@@ -270,6 +270,11 @@ function _get_default(model, id)
     throw(ArgumentError("'$id' is not in the model"))
 end
 
+function _get_condition_value(petab, condition, id)
+    i = findfirst(==(id), condition.target_ids)
+    return isnothing(i) ? _get_default(petab.model, id) : condition.target_values[i]
+end
+
 # Value of event target id at time t, nothing when no event on id has fired
 function _get_u_value(petab, id, times, t)
     value = nothing
@@ -280,6 +285,16 @@ function _get_u_value(petab, id, times, t)
         times[uidx] <= t && (value = parse(Float64, event.target_values[j]))
     end
     return value
+end
+
+function _get_u_start(petab, condition, id)
+    value = _get_condition_value(petab, condition, id)
+    value isa Int && throw(
+        ArgumentError(
+            "condition '$(condition.condition_id)' sets event target '$id' to an estimated parameter, which is not supported"
+        )
+    )
+    return Float64(value)
 end
 
 # Measurements-table rows
@@ -439,13 +454,13 @@ end
 function _determine_mesh(petab, sols, mesh_size)
     t_stops = _get_t_stops(petab)
     if mesh_size == :small
-        every, K = 2, 4
+        every, K = 1, 4
     elseif mesh_size == :medium
         every, K = 4, 4
     elseif mesh_size == :large
-        every, K = 8, 4
+        every, K = 16, 3
     elseif mesh_size == :massive
-        every, K = 16, 4
+        every, K = 32, 3
     end
     nodes = [_get_nodes(sols[cidx].t, t_stops[cidx], every) for cidx in eachindex(sols)]
     N = maximum(length.(nodes)) - 1
@@ -457,14 +472,14 @@ end
 
 _determine_mesh(petab, sols::Nothing, mesh_size) = Vector{Float64}[], 0
 
-# Mesh size by the variable count of the finest mesh, a node at every integrator step with K = 4
+# TODO FIGURE OUT BETTER HEURISTICS
 function _get_mesh_size(petab, sols, Nz)
     t_stops = _get_t_stops(petab)
     N1 = maximum(length(_get_nodes(sols[cidx].t, t_stops[cidx], 1)) for cidx in eachindex(sols)) - 1
     nvar1 = Nz * length(petab.conditions) * N1 * 5
-    return nvar1 < 5e5   ? :small  :
-           nvar1 < 2.5e6 ? :medium :
-           nvar1 < 1e7   ? :large  : :massive
+    return nvar1 < 1e5 ? :small  :
+           nvar1 < 1e6 ? :medium :
+           nvar1 < 1e7 ? :large  : :massive
 end
 
 _get_mesh_size(petab, sols::Nothing, Nz) = :small
@@ -534,9 +549,7 @@ function _get_cv(petab, theta)
     value(cell) = cell isa Int ? _linscale(theta[cell], scales[cell]) : cell
     cv = Matrix{Float64}(undef, length(cv_ids), length(petab.conditions))
     for (cidx, condition) in enumerate(petab.conditions), (cvidx, id) in enumerate(cv_ids)
-        i = findfirst(==(id), condition.target_ids)
-        isnothing(i) && throw(ArgumentError("condition '$(condition.condition_id)' leaves '$id' unset"))
-        cv[cvidx,cidx] = value(condition.target_values[i])
+        cv[cvidx,cidx] = value(_get_condition_value(petab, condition, id))
     end
     return cv
 end

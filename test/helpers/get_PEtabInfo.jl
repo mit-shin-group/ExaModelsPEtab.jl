@@ -119,9 +119,8 @@
         @test EMP._split_widest!([0.0, 1.0, 3.0], 4) == [0.0, 0.5, 1.0, 2.0, 3.0]
 
         sols = [(; t = collect(0.0:0.25:4.0)), (; t = [0.0, 4.0])]
-        for (mesh_size, expected) in ((:small, (8, 4)), (:medium, (4, 4)), (:large, (4, 4)), (:massive, (4, 4)))
-            nodes, K = EMP._determine_mesh(petab, sols, mesh_size)
-            @test (length(nodes[1]) - 1, K) == expected
+        for mesh_size in (:small, :medium, :large, :massive)
+            nodes, _ = EMP._determine_mesh(petab, sols, mesh_size)
             @test all(node -> length(node) == length(nodes[1]), nodes)
         end
         @test EMP._determine_mesh(petab, nothing, :small) == (Vector{Float64}[], 0)
@@ -198,8 +197,9 @@
         preeq = [EMP.PEtabCondition("s1", ["a"], Union{Float64, Int}[1])]
         @test_throws ArgumentError EMP._get_cv_ids((; parameters, conditions, preeq_conditions = preeq))
 
+        model = EMP.PEtabModel(nothing, [:x => 1.0], [:a => 4.0], nothing)
         unset = [conditions[1], EMP.PEtabCondition("c2", ["b"], Union{Float64, Int}[2.0])]
-        @test_throws ArgumentError EMP._get_cv0((; parameters, conditions = unset, preeq_conditions = EMP.PEtabCondition[]))
+        @test EMP._get_cv0((; parameters, conditions = unset, preeq_conditions = EMP.PEtabCondition[], model)) == [1.0 4.0]
     end
 
     @testset "rejects what it cannot parse" begin

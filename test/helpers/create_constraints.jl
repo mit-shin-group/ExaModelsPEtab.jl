@@ -76,6 +76,33 @@
         )
     end
 
+    @testset "fills an empty condition cell with the model default" begin
+        function blank(condition_id, id)
+            return function (content)
+                lines = String.(filter(!isempty, split(content, '\n')))
+                icol = EMP._get_index(id, split(lines[1], '\t'))
+                irow = findfirst(line -> first(split(line, '\t')) == condition_id, lines)
+                cells = String.(split(lines[irow], '\t'))
+                cells[icol] = ""
+                lines[irow] = join(cells, '\t')
+                return join(lines, '\n')
+            end
+        end
+        cidx_of(petab, condition_id) = EMP._get_index(condition_id, [condition.condition_id for condition in petab.conditions])
+
+        petab = EMP._parse_yaml(revise_model("Armistead_CellDeathDis2024", :conditions, blank("mutant", "S_on")))
+        cidx = cidx_of(petab, "mutant")
+        @test !("S_on" in petab.conditions[cidx].target_ids)
+        cvfixed = EMP._get_cvfixed(petab, petab.conditions)
+        @test cvfixed[EMP._get_index("S_on", EMP._get_cvfixed_ids(petab)),cidx] == EMP._get_default(petab.model, "S_on") == 1.0
+
+        petab = EMP._parse_yaml(revise_model("Bruno_JExpBot2016", :conditions, blank("model1_data2", "init_bcar")))
+        cidx = cidx_of(petab, "model1_data2")
+        @test "init_bcar" in EMP._get_cv_ids(petab)
+        cv = EMP._get_cv(petab, EMP._get_theta0(petab))
+        @test cv[EMP._get_index("init_bcar", EMP._get_cv_ids(petab)),cidx] == EMP._get_default(petab.model, "init_bcar")
+    end
+
     @testset "the event values of $model" for model in filter(model -> !isempty(peinfo(model).events), mesh_models)
         PEinfo = peinfo(model)
         Nc, N = EMP._get_Nc(PEinfo), length(peinfo(model).nodes[1]) - 1
@@ -85,10 +112,26 @@
             u[uidx,cidx,i] == u[uidx,cidx,i+1] || PEinfo.nodes[cidx][i+1] in PEinfo.event_times[:,cidx]
             for uidx in eachindex(u_ids), cidx in 1:Nc, i in 1:(N - 1)
         )
+        start(condition, id) = id in condition.target_ids ?
+            condition.target_values[EMP._get_index(id, condition.target_ids)] : EMP._get_default(PEinfo.model, id)
         @test all(
-            u[uidx,cidx,1] == EMP._get_default(PEinfo.model, id)
+            u[uidx,cidx,1] == start(PEinfo.conditions[cidx], id)
             for (uidx, id) in enumerate(u_ids), cidx in 1:Nc if !any(iszero, PEinfo.event_times[:,cidx])
         )
+    end
+
+    @testset "rewrites an ifelse as a max or min" begin
+        EMP.Symbolics.@variables x c
+        unwrap = EMP.Symbolics.unwrap
+        value(expr, xv, cv) = EMP.SymbolicUtils.unwrap_const(EMP.Symbolics.fixpoint_sub(expr, Dict(x => xv, c => cv); fold = Val(true)))
+        for term in (ifelse(c < x, x - c, 0), ifelse(x > c, x - c, 0), ifelse(x < c, x - c, 0), ifelse(x <= c, 2x, x + c))
+            rewritten = EMP._get_maxmin(unwrap(term))
+            @test EMP.Symbolics.operation(rewritten) in (max, min)
+            @test all(value(rewritten, xv, cv) == value(unwrap(term), xv, cv) for xv in (0.0, 3.0), cv in (1.0, 2.0))
+        end
+        @test EMP.Symbolics.operation(EMP._get_maxmin(unwrap(ifelse(c < x, x - c, 0)))) === max
+        @test EMP.Symbolics.operation(EMP._get_maxmin(unwrap(ifelse(x < c, x - c, 0)))) === min
+        @test_throws ArgumentError EMP._get_maxmin(unwrap(ifelse(x < c, x, 2c)))
     end
 
     @testset "groups the right-hand side terms" begin
