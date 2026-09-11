@@ -15,7 +15,7 @@
         @test core.y.length == Nm
         @test (:sigma in propertynames(core)) == (Nsigma > 0)
         Nsigma == 0 || @test core.sigma.length == Nsigma
-        @test core.ncon == ncon + Nsum + Nm + Nsigma
+        @test core.ncon == ncon + Nm + Nsigma
 
         nlp = EMP.ExaModels.ExaModel(core)
         c = similar(nlp.meta.x0, nlp.meta.ncon)
@@ -55,6 +55,18 @@
         @test isequal(bind(top, sums), unwrap(top))
         @test isempty(sums)
         @test length(EMP._get_y_terms(unwrap(top))) == 9
+
+        inner = 1 + (z[1] + z[2]) / z[3]
+        @test length(EMP._get_y_terms(unwrap(inner))) == 3
+
+        nested = z[1] / (sum(z[j] for j in 2:6) + theta[1] * sqrt(sum(z[j] for j in 1:9)))
+        sums = []
+        bind(nested, sums)
+        @test length(sums) == 1
+        for term in EMP._get_terms(sums[1][1])
+            bind(term, sums)
+        end
+        @test length(unique(sums)) == 2
     end
 
     @testset "the measurement constants" begin

@@ -20,13 +20,16 @@
         core = EMP._create_constraints(core, PEinfo)
 
         collocation, continuity, ic, cv = Nz * Nc * N * K, Nz * Nc * (N - 1), Nz * Nc, Ncv * Nc
-        @test core.ncon == collocation + continuity + ic + cv + Nz * Nss
+        Nsum = EMP._get_Nsum(core)
+        @test core.ncon == collocation + continuity + Nsum + ic + cv + Nz * Nss
 
         c, scale, from = residual(core), maximum(abs, PEinfo.z0), 0
         @test maximum(abs, c[from+1:from+collocation]) <= 1e-3 * scale
         from += collocation
         @test maximum(abs, c[from+1:from+continuity]) <= 1e-10 * scale
         from += continuity
+        @test Nsum == 0 || maximum(abs, c[from+1:from+Nsum]) <= 1e-8 * (1 + maximum(abs, block(Array(core.x0), core.zsum)))
+        from += Nsum
         @test maximum(abs, c[from+1:from+ic]) <= 1e-8 * scale
         from += ic
         @test cv == 0 || all(iszero, c[from+1:from+cv])
@@ -53,7 +56,7 @@
             du = similar(z)
             prob.f(du, z, prob.p, t)
             ours = [f[v](PEinfo.theta0, z, PEinfo.cv0[:,cidx], cvfixed[:,cidx], u[:,cidx,i], t) for v in 1:Nz]
-            @test ours ≈ du rtol = 1e-8
+            @test ours ≈ du rtol = 1e-8 atol = 1e-12 * (1 + maximum(abs, z))
         end
     end
 

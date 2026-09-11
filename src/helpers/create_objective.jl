@@ -21,10 +21,11 @@ function _create_y(
     )
     # Resolve the observable formula of every measurement
     arguments, yvalue = _get_arguments(PEinfo), _get_yvalue()
-    exprs = _get_exprs(PEinfo, arguments, yvalue, [Meta.parse(observable.observable_formula) for observable in PEinfo.observables])
+    exprs = _get_y_exprs(PEinfo, arguments, yvalue)
 
     # Create zsum for the sums of states inside the formulas
-    core, zsum_sym, zsum0, exprs = _create_zsum(core, PEinfo, arguments, exprs)
+    # TODO (REVIEW) zsum is created in _create_constraints, here the formulas only bind to it
+    zsum_sym, zsum0, exprs = _bind_zsum(core, PEinfo, arguments, exprs)
 
     # Create ExaModels variable
     y0 = _get_starts(PEinfo, arguments, yvalue, exprs, zeros(_get_Nm(PEinfo)), zsum_sym, zsum0)
@@ -41,25 +42,15 @@ function _create_y(
 end
 
 # Create zsum (sums of states inside a denominator, a function, or a large product of an observable) and its constraints, one per sum and measurement point
+# TODO (REVIEW) also the sums of the fzic initial conditions at (cidx, 1, 0), the terms of every sum bound in turn
 function _create_zsum(
         core::EMC.CollocationExaCore,
-        PEinfo,
-        arguments,
-        exprs
+        PEinfo
     )
-    # Find the sums, one key per sum and measurement point
-    points = _get_measurement_points(PEinfo)
-    sums = []
-    for (m, measurement) in enumerate(PEinfo.measurements)
-        _bind_sums(exprs[m], false, sums, (measurement.cidx, points[m]...), nothing, _get_zsum(1))
-    end
-    keys = unique(sums)
-    index = Dict(key => q for (q, key) in enumerate(keys))
-    zsum_sym = _get_zsum(length(keys))
-    exprs = [
-        _bind_sums(exprs[m], false, sums, (measurement.cidx, points[m]...), index, zsum_sym)
-        for (m, measurement) in enumerate(PEinfo.measurements)
-    ]
+    # Find the sums, one key per sum and point
+    arguments = _get_arguments(PEinfo)
+    keys = _get_zsum_keys(PEinfo, arguments)
+    index, zsum_sym = _get_zsum_index(keys)
 
     # Create ExaModels variable
     cvfixed = _get_cvfixed(PEinfo, PEinfo.conditions)
@@ -80,20 +71,60 @@ function _create_zsum(
         1:length(keys);
         start = zsum0,
     )
-    isempty(keys) && return core, zsum_sym, zsum0, exprs
+    isempty(keys) && return core
 
     # Create constraints zsum[q] = sum, one call per term form
-    times = Dict((measurement.cidx, points[m]...) => measurement.time for (m, measurement) in enumerate(PEinfo.measurements))
-    items = [(q, sum, cidx, i, k, times[(cidx, i, k)]) for (q, (sum, cidx, i, k)) in enumerate(keys)]
+    items = [
+        (q, _bind_sums(term, false, [], (cidx, i, k), index, zsum_sym), cidx, i, k, PEinfo.nodes[cidx][i + (k > 0)])
+        for (q, (sum, cidx, i, k)) in enumerate(keys) for term in _get_terms(sum)
+    ]
     ExaModels.@add_con(core, con, zsum[q] for q in 1:length(keys))
-    for (f, rows) in _get_form_groups(core, PEinfo, arguments, [(q, term, cidx, i, k, t) for (q, sum, cidx, i, k, t) in items for term in _get_terms(sum)])
+    for (f, rows) in _get_form_groups(core, PEinfo, arguments, items)
         core = _create_term_constraints(core, con, f, rows)
     end
 
-    return core, zsum_sym, zsum0, exprs
+    return core
 end
 
-_create_zsum(core::ExaModels.ExaCore, PEinfo, arguments, exprs) = core, _get_zsum(0), Float64[], exprs
+# TODO (REVIEW) Keys (sum, cidx, i, k) of zsum: the sums bound in the fzic initial conditions and the observable formulas at their points, then inside the terms of every key until no key is new
+function _get_zsum_keys(PEinfo, arguments)
+    points = _get_measurement_points(PEinfo)
+    exprs = _get_y_exprs(PEinfo, arguments, _get_yvalue())
+    items = [
+        _get_ic_items(PEinfo, arguments);
+        [(exprs[m], (measurement.cidx, points[m]...)) for (m, measurement) in enumerate(PEinfo.measurements)]
+    ]
+    sums = []
+    for (expr, point) in items
+        _bind_sums(expr, false, sums, point, nothing, _get_zsum(1))
+    end
+    keys, q = unique(sums), 0
+    while q < length(keys)
+        q += 1
+        for term in _get_terms(keys[q][1])
+            _bind_sums(term, false, sums, keys[q][2:end], nothing, _get_zsum(1))
+        end
+        keys = unique(sums)
+    end
+    return keys
+end
+
+# TODO (REVIEW) index[key] => q of zsum[q], and the symbolic zsum
+_get_zsum_index(keys) = Dict(key => q for (q, key) in enumerate(keys)), _get_zsum(length(keys))
+
+# TODO (REVIEW) exprs with their sums bound to zsum, its symbol and start values
+function _bind_zsum(core::EMC.CollocationExaCore, PEinfo, arguments, exprs)
+    index, zsum_sym = _get_zsum_index(_get_zsum_keys(PEinfo, arguments))
+    points = _get_measurement_points(PEinfo)
+    exprs = [
+        _bind_sums(exprs[m], false, [], (measurement.cidx, points[m]...), index, zsum_sym)
+        for (m, measurement) in enumerate(PEinfo.measurements)
+    ]
+    zsum0 = Array(core.x0)[core.zsum.offset .+ (1:_get_Nsum(core))]
+    return zsum_sym, zsum0, exprs
+end
+
+_bind_zsum(core::ExaModels.ExaCore, PEinfo, arguments, exprs) = _get_zsum(0), Float64[], exprs
 
 # Create y constraints, one kernel per form up to 8 leaves and one per term form above
 function _create_y_constraints(
@@ -369,13 +400,15 @@ function _bind_sums(x, under, sums, point, index, zsum)
 end
 
 # Top-level terms of an observable formula, a numerator sum distributed over its denominator
+# TODO (REVIEW) a quotient inside a top-level term is distributed as well
 function _get_y_terms(expr)
     expr isa Number && return [expr]
     if SymbolicUtils.iscall(expr) && SymbolicUtils.operation(expr) === (/)
         num, den = SymbolicUtils.arguments(expr)
         return [term / den for term in _get_terms(SymbolicUtils.expand(num))]
     end
-    return _get_terms(SymbolicUtils.expand(expr))
+    terms = _get_terms(SymbolicUtils.expand(expr))
+    return length(terms) == 1 ? terms : [t for term in terms for t in _get_y_terms(term)]
 end
 
 # Measured value on the observableTransformation scale
@@ -388,6 +421,10 @@ _get_constant(measurement::PEtabMeasurement, transform) =
     0.5 * log(2pi) +
     (transform == :lin ? 0.0 : log(measurement.measurement)) +
     (transform == :log10 ? log(log(10)) : 0.0)
+
+# TODO (REVIEW) exprs[m]: observable formula of measurement m resolved into the arguments
+_get_y_exprs(PEinfo, arguments, yvalue) =
+    _get_exprs(PEinfo, arguments, yvalue, [Meta.parse(observable.observable_formula) for observable in PEinfo.observables])
 
 # exprs[m]: formulas[yidx] of measurement m, its cells and every id resolved into the arguments
 function _get_exprs(PEinfo, arguments, yvalue, formulas)
@@ -577,17 +614,33 @@ function _get_form_groups(core, PEinfo, arguments, items)
 end
 
 # Groups of measurements ms sharing an observable and cells: (f, rows) with rows = (m, ssidx, cvfixed_m)
+# TODO (REVIEW) now groups of measurements ms sharing a form at the steady state: (f, rows) with rows = (m, ssidx, js, vs, data)
 function _get_groups(core::ExaModels.ExaCore, PEinfo, arguments, exprs, ms)
-    cvfixed = _get_cvfixed(PEinfo, PEinfo.conditions)
+    isempty(ms) && return []
+    cvfixed, u = _get_cvfixed(PEinfo, PEinfo.preeq_conditions), _get_u_ss(PEinfo)
+    slots = _get_slots_steadystate(PEinfo, maximum(_count_slots(exprs[m]) for m in ms))
+    forms, occurrences = Dict{String, Any}(), []
+    for m in ms
+        ssidx = PEinfo.preeq_idxs[PEinfo.measurements[m].cidx]
+        form = _get_form(exprs[m])
+        expr, leaves = _get_expr(exprs[m], arguments, slots)
+        haskey(forms, form) || (forms[form] = expr)
+        push!(occurrences, (
+            form, m, ssidx,
+            Tuple(leaves.js), Tuple(leaves.vs), Tuple(_get_data(leaf, cvfixed, u, ssidx) for leaf in leaves.data),
+        ))
+    end
     return [
         (
-            _get_fy(exprs[first(group)], arguments),
-            [
-                (m, PEinfo.preeq_idxs[PEinfo.measurements[m].cidx], Tuple(cvfixed[:,PEinfo.measurements[m].cidx]))
-                for m in group
-            ]
+            Symbolics.build_function(
+                forms[form],
+                arguments.theta, slots.z, slots.zidxs..., slots.js, slots.vs, slots.data, arguments.t;
+                expression = Val{false},
+                nanmath = false
+            ),
+            [occurrence[2:end] for occurrence in occurrences if occurrence[1] == form]
         )
-        for group in _get_key_groups(PEinfo, ms)
+        for form in unique(first.(occurrences))
     ]
 end
 
@@ -641,8 +694,8 @@ function _create_measurement_constraints(
 
     # Create constraints
     ExaModels.@add_con(core,
-        variable[m] - f(theta[:], zss[:,ssidx], (), cvfixed_m)
-        for (m, ssidx, cvfixed_m) in rows
+        variable[m] - f(theta, zss, ssidx, js, vs, data_m, 0.0)
+        for (m, ssidx, js, vs, data_m) in rows
     )
 
     return core
@@ -718,38 +771,38 @@ function _create_theta_sigma_objective(
     # Create residuals
     for transform in (:lin, :log, :log10)
         itr = [
-            (_get_ymeas(PEinfo.measurements[m], transform), m, ssidx, cvfixed_m)
-            for (m, ssidx, cvfixed_m) in rows if _get_transform(PEinfo, m) == transform
+            (_get_ymeas(PEinfo.measurements[m], transform), m, ssidx, js, vs, data_m)
+            for (m, ssidx, js, vs, data_m) in rows if _get_transform(PEinfo, m) == transform
         ]
         isempty(itr) && continue
         if transform == :lin
             ExaModels.@add_obj(core,
-                0.5 * ((y[m] - ymeas) / f(theta[:], zss[:,ssidx], (), cvfixed_m))^2
-                for (ymeas, m, ssidx, cvfixed_m) in itr
+                0.5 * ((y[m] - ymeas) / f(theta, zss, ssidx, js, vs, data_m, 0.0))^2
+                for (ymeas, m, ssidx, js, vs, data_m) in itr
             )
         elseif transform == :log
             ExaModels.@add_obj(core,
-                0.5 * ((log(y[m]) - ymeas) / f(theta[:], zss[:,ssidx], (), cvfixed_m))^2
-                for (ymeas, m, ssidx, cvfixed_m) in itr
+                0.5 * ((log(y[m]) - ymeas) / f(theta, zss, ssidx, js, vs, data_m, 0.0))^2
+                for (ymeas, m, ssidx, js, vs, data_m) in itr
             )
         else
             ExaModels.@add_obj(core,
-                0.5 * ((log10(y[m]) - ymeas) / f(theta[:], zss[:,ssidx], (), cvfixed_m))^2
-                for (ymeas, m, ssidx, cvfixed_m) in itr
+                0.5 * ((log10(y[m]) - ymeas) / f(theta, zss, ssidx, js, vs, data_m, 0.0))^2
+                for (ymeas, m, ssidx, js, vs, data_m) in itr
             )
         end
     end
 
     # Create log(sigma), one term per condition since sigma reads no state
-    counts, first_rows = Dict{Any, Int}(), Dict{Any, Any}()
-    for row in rows
-        counts[row[3]] = get(counts, row[3], 0) + 1
-        get!(first_rows, row[3], row)
+    # TODO (REVIEW) now one term per distinct (ssidx, js, vs, data_m)
+    counts = Dict{Any, Int}()
+    for (m, ssidx, js, vs, data_m) in rows
+        counts[(ssidx, js, vs, data_m)] = get(counts, (ssidx, js, vs, data_m), 0) + 1
     end
-    itr = [(counts[key], first_rows[key][2], key) for key in unique(cvfixed_m for (m, ssidx, cvfixed_m) in rows)]
+    itr = [(counts[key], key...) for key in unique((ssidx, js, vs, data_m) for (m, ssidx, js, vs, data_m) in rows)]
     ExaModels.@add_obj(core,
-        count * log(f(theta[:], zss[:,ssidx], (), cvfixed_m))
-        for (count, ssidx, cvfixed_m) in itr
+        count * log(f(theta, zss, ssidx, js, vs, data_m, 0.0))
+        for (count, ssidx, js, vs, data_m) in itr
     )
 
     return core

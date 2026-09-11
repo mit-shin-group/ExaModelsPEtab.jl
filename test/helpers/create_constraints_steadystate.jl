@@ -44,6 +44,16 @@
             EMP._create_zss_constraints(EMP._create_variables(EMP.EMC.CollocationExaCore(PEinfo.nodes, PEinfo.K), PEinfo), PEinfo)
         @test core.ncon == Nz * Nss
         @test maximum(abs, residual(core)) <= 1e-4 * (1 + maximum(maximum(abs, zss) for zss in PEinfo.zss0))
+
+        # TODO (REVIEW) the kept rows of f at a perturbed point, sorted since the two kernel paths order rows differently
+        rows = [(v, ssidx) for ssidx in 1:Nss for v in keep_rows[ssidx]]
+        nlp = EMP.ExaModels.ExaModel(core)
+        x = nlp.meta.x0 .+ 0.1 .* randn(length(nlp.meta.x0)) .* max.(abs.(nlp.meta.x0), 1.0)
+        c = similar(x, nlp.meta.ncon)
+        EMP.ExaModels.NLPModels.cons!(nlp, x, c)
+        theta, zss = block(x, core.theta), block(x, core.zss)
+        expected = [f[v](theta, zss[:,ssidx], (), cvfixed[:,ssidx], u[:,ssidx], 0.0) for (v, ssidx) in rows]
+        @test sort(c[1:length(rows)]) ≈ sort(expected) rtol = 1e-10
     end
 
     @testset "rejects a condition variable with pre-equilibration" begin

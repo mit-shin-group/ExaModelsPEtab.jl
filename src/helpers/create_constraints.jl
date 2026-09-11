@@ -85,31 +85,14 @@ function _create_ic_constraints(
     # Unpack variables
     z, theta, cv = core.z, core.theta, core.cv
 
+    # TODO (REVIEW) Create zsum, read by the fzic kernels below and by the observables
+    core = _create_zsum(core, PEinfo)
+
     # Parse z(t=0) = ???
     arguments = _get_arguments(PEinfo)
     zic_sym = _get_zic_sym(PEinfo, arguments)
-    cvfixed = _get_cvfixed(PEinfo, PEinfo.conditions)
     scales = [parameter.scale for parameter in PEinfo.parameters if parameter.estimate]
-    thetas = [_linscale(arguments.theta[j], scale) for (j, scale) in enumerate(scales)]
-    state_ids = _get_state_ids(PEinfo.model)
-    carried(v, cidx) = PEinfo.preeq_idxs[cidx] != 0 && !(state_ids[v] in PEinfo.conditions[cidx].target_ids)
-    itr_fixed, itr_cv, itr_theta = Tuple{Int, Int, Float64}[], Tuple{Int, Int, Int}[], Tuple{Int, Int, Int}[]
-    itr_zss, itr_fzic = Tuple{Int, Int, Int}[], Tuple{Int, Int}[]
-    for v in 1:_get_Nz(PEinfo)
-        value = Symbolics.value(zic_sym[v])
-        cvfixedidx = findfirst(idx -> isequal(zic_sym[v], arguments.cvfixed[idx]), 1:size(cvfixed, 1))
-        cvidx = findfirst(idx -> isequal(zic_sym[v], arguments.cv[idx]), 1:_get_Ncv(PEinfo))
-        j = findfirst(candidate -> isequal(zic_sym[v], candidate), thetas)
-        for cidx in 1:_get_Nc(PEinfo)
-            if carried(v, cidx)             push!(itr_zss, (v, cidx, PEinfo.preeq_idxs[cidx]))
-            elseif value isa Number         push!(itr_fixed, (v, cidx, Float64(value)))
-            elseif !isnothing(cvfixedidx)   push!(itr_fixed, (v, cidx, cvfixed[cvfixedidx,cidx]))
-            elseif !isnothing(cvidx)        push!(itr_cv, (v, cidx, cvidx))
-            elseif !isnothing(j)            push!(itr_theta, (v, cidx, j))
-            else                            push!(itr_fzic, (v, cidx))
-            end
-        end
-    end
+    itr_fixed, itr_cv, itr_theta, itr_zss, itr_fzic = _get_ic_rows(PEinfo, arguments, zic_sym)
 
     # Create constraints for z(t=0) = fixed value
     if !isempty(itr_fixed)
@@ -147,24 +130,54 @@ function _create_ic_constraints(
     end
 
     # Create constraints for z(t=0) = fzic
-    for v in unique(first.(itr_fzic))
-        fzic = Symbolics.build_function(
-            zic_sym[v], 
-            arguments.theta, 
-            arguments.z, 
-            arguments.cv, 
-            arguments.cvfixed;
-            expression = Val{false}, 
-            nanmath = false
-        )
-        itr = [(cidx, Tuple(cvfixed[:,cidx])) for (vv, cidx) in itr_fzic if vv == v]
-        ExaModels.@add_con(core,
-            z[v,cidx,1,0] - fzic(theta[:], z[:,cidx,1,0], cv[:,cidx], cvfixed_c)
-            for (cidx, cvfixed_c) in itr
-        )
+    # TODO (REVIEW) base rows z(t=0) minus the terms of fzic with its sums bound to zsum, one kernel per term form
+    isempty(itr_fzic) && return core
+    index, zsum_sym = _get_zsum_index(_get_zsum_keys(PEinfo, arguments))
+    items = [
+        (row, term, cidx, 1, 0, PEinfo.nodes[cidx][1])
+        for (row, (v, cidx)) in enumerate(itr_fzic)
+        for term in _get_y_terms(_bind_sums(Symbolics.value(zic_sym[v]), false, [], (cidx, 1, 0), index, zsum_sym))
+    ]
+    ExaModels.@add_con(core, con, z[v,cidx,1,0] for (v, cidx) in itr_fzic)
+    for (f, rows) in _get_form_groups(core, PEinfo, arguments, items)
+        core = _create_term_constraints(core, con, f, rows)
     end
 
     return core
+end
+
+# TODO (REVIEW) Rows (v, cidx) of z(t=0) by kind: (fixed value, cv, theta, zss, fzic)
+function _get_ic_rows(PEinfo, arguments, zic_sym)
+    cvfixed = _get_cvfixed(PEinfo, PEinfo.conditions)
+    scales = [parameter.scale for parameter in PEinfo.parameters if parameter.estimate]
+    thetas = [_linscale(arguments.theta[j], scale) for (j, scale) in enumerate(scales)]
+    state_ids = _get_state_ids(PEinfo.model)
+    carried(v, cidx) = PEinfo.preeq_idxs[cidx] != 0 && !(state_ids[v] in PEinfo.conditions[cidx].target_ids)
+    itr_fixed, itr_cv, itr_theta = Tuple{Int, Int, Float64}[], Tuple{Int, Int, Int}[], Tuple{Int, Int, Int}[]
+    itr_zss, itr_fzic = Tuple{Int, Int, Int}[], Tuple{Int, Int}[]
+    for v in 1:_get_Nz(PEinfo)
+        value = Symbolics.value(zic_sym[v])
+        cvfixedidx = findfirst(idx -> isequal(zic_sym[v], arguments.cvfixed[idx]), 1:size(cvfixed, 1))
+        cvidx = findfirst(idx -> isequal(zic_sym[v], arguments.cv[idx]), 1:_get_Ncv(PEinfo))
+        j = findfirst(candidate -> isequal(zic_sym[v], candidate), thetas)
+        for cidx in 1:_get_Nc(PEinfo)
+            if carried(v, cidx)             push!(itr_zss, (v, cidx, PEinfo.preeq_idxs[cidx]))
+            elseif value isa Number         push!(itr_fixed, (v, cidx, Float64(value)))
+            elseif !isnothing(cvfixedidx)   push!(itr_fixed, (v, cidx, cvfixed[cvfixedidx,cidx]))
+            elseif !isnothing(cvidx)        push!(itr_cv, (v, cidx, cvidx))
+            elseif !isnothing(j)            push!(itr_theta, (v, cidx, j))
+            else                            push!(itr_fzic, (v, cidx))
+            end
+        end
+    end
+    return itr_fixed, itr_cv, itr_theta, itr_zss, itr_fzic
+end
+
+# TODO (REVIEW) (expr, point) of the fzic initial conditions, z(t=0) = fzic(...) at point (cidx, 1, 0)
+function _get_ic_items(PEinfo, arguments)
+    zic_sym = _get_zic_sym(PEinfo, arguments)
+    itr_fzic = last(_get_ic_rows(PEinfo, arguments, zic_sym))
+    return [(Symbolics.value(zic_sym[v]), (cidx, 1, 0)) for (v, cidx) in itr_fzic]
 end
 
 # Create cv auxiliary variable constraints, cv = {fixed value, theta}
@@ -376,35 +389,45 @@ end
 # arguments (theta, z, cv, m, i, k, js, vs, cvidxs, data, t) and terms = [(v, js, vs, cvidxs, data[m,i])]
 function _analyze_rhs(core, PEinfo)
     arguments = _get_arguments(PEinfo)
-    rules = _get_substitutions(PEinfo, arguments)
+    terms = _get_rhs_terms(PEinfo, arguments)
+    slots = _get_slots(core, PEinfo, maximum(_count_slots(term) for (v, term) in terms))
     cvfixed, u = _get_cvfixed(PEinfo, PEinfo.conditions), _get_u(PEinfo)
-    Nc, N = _get_Nc(PEinfo), core.N
-    terms = [
+    points = [(m, i) for m in 1:_get_Nc(PEinfo), i in 1:core.N]
+    forms = _get_forms(terms, arguments, slots, cvfixed, u, points)
+    return forms, (arguments.theta, slots.z, slots.cv, slots.m, slots.i, slots.k, slots.js, slots.vs, slots.cvidxs, slots.data, arguments.t)
+end
+
+# TODO (REVIEW) Top-level + terms of every right-hand side, [(v, term)] over the arguments
+function _get_rhs_terms(PEinfo, arguments)
+    rules = _get_substitutions(PEinfo, arguments)
+    return [
         (v, term)
         for (v, equation) in enumerate(MTK.equations(PEinfo.model.sys))
         for term in _get_terms(Symbolics.fixpoint_sub(equation.rhs, rules; fold = Val(true)))
     ]
-    slots = _get_slots(core, PEinfo, maximum(_count_slots(term) for (v, term) in terms))
+end
+
+# TODO (REVIEW) Terms grouped by form: [(expr, [(v, js, vs, cvidxs, data)])] with data[point] resolved at every point
+function _get_forms(terms, arguments, slots, cvfixed, u, points)
     exprs, occurrences = Dict{String, Any}(), []
     for (v, term) in terms
         form = _get_form(term)
         expr, leaves = _get_expr(term, arguments, slots)
         haskey(exprs, form) || (exprs[form] = expr)
-        data = [Tuple(_get_data(leaf, cvfixed, u, m, i) for leaf in leaves.data) for m in 1:Nc, i in 1:N]
+        data = [Tuple(_get_data(leaf, cvfixed, u, point...) for leaf in leaves.data) for point in points]
         push!(occurrences, (form, v, Tuple(leaves.js), Tuple(leaves.vs), Tuple(leaves.cvidxs), data))
     end
-    forms = [
+    return [
         (exprs[form], [(v, js, vs, cvidxs, data) for (other, v, js, vs, cvidxs, data) in occurrences if other == form])
         for form in unique(first.(occurrences))
     ]
-    return forms, (arguments.theta, slots.z, slots.cv, slots.m, slots.i, slots.k, slots.js, slots.vs, slots.cvidxs, slots.data, arguments.t)
 end
 
 # Slot arrays of a form: z[v,m,i,k] and cv[cvidx,m] with the mesh indices, index tuples js, vs, cvidxs, data
 function _get_slots(core, PEinfo, n; Nsum = 0)
     Nz, Nc, N, K, Ncv = _get_Nz(PEinfo), _get_Nc(PEinfo), core.N, core.K, _get_Ncv(PEinfo)
     Symbolics.@variables z[1:Nz, 1:Nc, 1:N, 1:(K + 1)] cv[1:Ncv, 1:Nc] zsum[1:Nsum] m::Int i::Int k::Int js[1:n]::Int vs[1:n]::Int cvidxs[1:n]::Int qs[1:n]::Int data[1:n]
-    return (; z, cv, zsum, m, i, k, js, vs, cvidxs, qs, data)
+    return (; z, cv, zsum, m, i, k, js, vs, cvidxs, qs, data, zidxs = (m, i, k))
 end
 
 _count_leaves(x) = isnothing(_get_leaf(x)) ? sum(_count_leaves, SymbolicUtils.arguments(x)) : 1
@@ -474,7 +497,7 @@ function _get_expr!(x, arguments, slots, leaves)
         kind, index = leaf
         kind === :t && return arguments.t
         kind === :theta && (push!(leaves.js, index); return arguments.theta[slots.js[length(leaves.js)]])
-        kind === :z && (push!(leaves.vs, index); return slots.z[slots.vs[length(leaves.vs)], slots.m, slots.i, slots.k])
+        kind === :z && (push!(leaves.vs, index); return slots.z[slots.vs[length(leaves.vs)], slots.zidxs...])
         kind === :cv && (push!(leaves.cvidxs, index); return slots.cv[slots.cvidxs[length(leaves.cvidxs)], slots.m])
         kind === :zsum && (push!(leaves.qs, index); return slots.zsum[slots.qs[length(leaves.qs)]])
         push!(leaves.data, leaf)
@@ -494,5 +517,13 @@ _get_data(leaf, cvfixed, u, m, i) = Float64(
     leaf[1] === :data    ? leaf[2] :
     leaf[1] === :cvfixed ? cvfixed[leaf[2],m] :
     leaf[1] === :u       ? u[leaf[2],m,i] :
+    throw(ArgumentError("unsupported leaf $(leaf[1]) in a right-hand side"))
+)
+
+# TODO (REVIEW) Value of a data leaf at the steady state of pre-equilibration condition ssidx
+_get_data(leaf, cvfixed, u, ssidx) = Float64(
+    leaf[1] === :data    ? leaf[2] :
+    leaf[1] === :cvfixed ? cvfixed[leaf[2],ssidx] :
+    leaf[1] === :u       ? u[leaf[2],ssidx] :
     throw(ArgumentError("unsupported leaf $(leaf[1]) in a right-hand side"))
 )
