@@ -421,8 +421,9 @@ end
 # Pre-equilibration steady states zss[ssidx], on the workers when there are any
 function _get_sols_ss(petab, theta0, solver, template)
     Nss = length(petab.preeq_conditions)
+    Nss == 0 && return Vector{Float64}[]
     Distributed.nworkers() > 1 && return Distributed.pmap(ssidx -> _solve_ss(petab.filename, theta0, ssidx), 1:Nss)
-    return [
+    return Vector{Float64}[
         _solve_steadystate(
             petab,
             _remake(petab, template, _get_op(petab, theta0, petab.preeq_conditions[ssidx], nothing), (0.0, Inf)),
