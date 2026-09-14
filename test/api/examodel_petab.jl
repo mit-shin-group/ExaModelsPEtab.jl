@@ -10,6 +10,10 @@
         @test EMP.ExaModels.NLPModels.obj(nlp, nlp.meta.x0) ≈ EMP.ExaModels.NLPModels.obj(examodel(model), examodel(model).meta.x0) rtol = 1e-10
     end
 
+    @testset "rejects $model, $reason" for (model, reason) in UNSUPPORTED
+        @test_throws ArgumentError examodel_petab(find_yaml(model))
+    end
+
     @testset "rejects the collocation keywords" begin
         yaml = find_yaml("Boehm_JProteomeRes2014")
         @test_throws ArgumentError examodel_petab(yaml; roots = nothing)

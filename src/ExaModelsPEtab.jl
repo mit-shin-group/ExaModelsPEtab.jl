@@ -42,6 +42,8 @@ import Symbolics.SymbolicUtils
 # for initial solve & steady-state model analysis
 import OrdinaryDiffEq as ODE
 import LinearAlgebra
+import SparseArrays
+import Distributed
 
 for file in [
         "helpers/structs",

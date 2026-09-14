@@ -54,6 +54,7 @@ end
 
 # Everything the ExaModel build reads
 struct PEtabInfo{M <: PEtabModel}
+    filename::String                            # PEtab .yaml file
     model::M
     parameters::Vector{PEtabParameter}
     conditions::Vector{PEtabCondition}          # simulation conditions, cidx = 1:Nc

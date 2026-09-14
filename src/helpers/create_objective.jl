@@ -24,7 +24,6 @@ function _create_y(
     exprs = _get_y_exprs(PEinfo, arguments, yvalue)
 
     # Create zsum for the sums of states inside the formulas
-    # TODO (REVIEW) zsum is created in _create_constraints, here the formulas only bind to it
     zsum_sym, zsum0, exprs = _bind_zsum(core, PEinfo, arguments, exprs)
 
     # Create ExaModels variable
@@ -42,7 +41,6 @@ function _create_y(
 end
 
 # Create zsum (sums of states inside a denominator, a function, or a large product of an observable) and its constraints, one per sum and measurement point
-# TODO (REVIEW) also the sums of the fzic initial conditions at (cidx, 1, 0), the terms of every sum bound in turn
 function _create_zsum(
         core::EMC.CollocationExaCore,
         PEinfo
@@ -86,7 +84,7 @@ function _create_zsum(
     return core
 end
 
-# TODO (REVIEW) Keys (sum, cidx, i, k) of zsum: the sums bound in the fzic initial conditions and the observable formulas at their points, then inside the terms of every key until no key is new
+# Keys (sum, cidx, i, k) of zsum: the sums bound in the fzic initial conditions and the observable formulas at their points, then inside the terms of every key until no key is new
 function _get_zsum_keys(PEinfo, arguments)
     points = _get_measurement_points(PEinfo)
     exprs = _get_y_exprs(PEinfo, arguments, _get_yvalue())
@@ -109,10 +107,10 @@ function _get_zsum_keys(PEinfo, arguments)
     return keys
 end
 
-# TODO (REVIEW) index[key] => q of zsum[q], and the symbolic zsum
+# index[key] => q of zsum[q], and the symbolic zsum
 _get_zsum_index(keys) = Dict(key => q for (q, key) in enumerate(keys)), _get_zsum(length(keys))
 
-# TODO (REVIEW) exprs with their sums bound to zsum, its symbol and start values
+# exprs with their sums bound to zsum, its symbol and start values
 function _bind_zsum(core::EMC.CollocationExaCore, PEinfo, arguments, exprs)
     index, zsum_sym = _get_zsum_index(_get_zsum_keys(PEinfo, arguments))
     points = _get_measurement_points(PEinfo)
@@ -183,6 +181,7 @@ function _create_sigma(
 
     # Unpack variables
     theta, cv, y = core.theta, core.cv, core.y
+    Ntheta, Ncv = _get_Ntheta(PEinfo), _get_Ncv(PEinfo)
 
     # Create sigma iterator, one group per observable and cells
     y0 = Array(core.x0)[y.offset .+ (1:_get_Nm(PEinfo))]
@@ -206,7 +205,7 @@ function _create_sigma(
     # Create constraints
     for (fsigma, itr) in groups
         ExaModels.@add_con(core,
-            sigma[row] - fsigma(theta[:], cv[:,cidx], cvfixed_m, (y[m],))
+            sigma[row] - fsigma(_colonindex(theta, Ntheta), _colonindex(cv, Ncv, cidx), cvfixed_m, (y[m],))
             for (row, m, cidx, cvfixed_m) in itr
         )
     end
@@ -400,7 +399,6 @@ function _bind_sums(x, under, sums, point, index, zsum)
 end
 
 # Top-level terms of an observable formula, a numerator sum distributed over its denominator
-# TODO (REVIEW) a quotient inside a top-level term is distributed as well
 function _get_y_terms(expr)
     expr isa Number && return [expr]
     if SymbolicUtils.iscall(expr) && SymbolicUtils.operation(expr) === (/)
@@ -422,7 +420,7 @@ _get_constant(measurement::PEtabMeasurement, transform) =
     (transform == :lin ? 0.0 : log(measurement.measurement)) +
     (transform == :log10 ? log(log(10)) : 0.0)
 
-# TODO (REVIEW) exprs[m]: observable formula of measurement m resolved into the arguments
+# exprs[m]: observable formula of measurement m resolved into the arguments
 _get_y_exprs(PEinfo, arguments, yvalue) =
     _get_exprs(PEinfo, arguments, yvalue, [Meta.parse(observable.observable_formula) for observable in PEinfo.observables])
 
@@ -614,7 +612,7 @@ function _get_form_groups(core, PEinfo, arguments, items)
 end
 
 # Groups of measurements ms sharing an observable and cells: (f, rows) with rows = (m, ssidx, cvfixed_m)
-# TODO (REVIEW) now groups of measurements ms sharing a form at the steady state: (f, rows) with rows = (m, ssidx, js, vs, data)
+# now groups of measurements ms sharing a form at the steady state: (f, rows) with rows = (m, ssidx, js, vs, data)
 function _get_groups(core::ExaModels.ExaCore, PEinfo, arguments, exprs, ms)
     isempty(ms) && return []
     cvfixed, u = _get_cvfixed(PEinfo, PEinfo.preeq_conditions), _get_u_ss(PEinfo)
@@ -794,7 +792,6 @@ function _create_theta_sigma_objective(
     end
 
     # Create log(sigma), one term per condition since sigma reads no state
-    # TODO (REVIEW) now one term per distinct (ssidx, js, vs, data_m)
     counts = Dict{Any, Int}()
     for (m, ssidx, js, vs, data_m) in rows
         counts[(ssidx, js, vs, data_m)] = get(counts, (ssidx, js, vs, data_m), 0) + 1

@@ -20,7 +20,7 @@ function _get_PEtabInfo(filename)
     theta0 = _get_theta0(petab)
     z0 = _get_z0(sols, nodes, K)
     cv0 = _get_cv0(petab)
-    zss0 = _get_zss0(sols_ss)
+    zss0 = sols_ss
 
     # PEtabInfo: PEtabTables, 
     return PEtabInfo(petab..., nodes, K, theta0, z0, cv0, zss0)
@@ -58,6 +58,7 @@ function _parse_yaml(filename)
     conditions = [_get_condition(conditions_table, id, parameters) for id in sim_ids]
     events = _get_events(files.sbml)
     return (
+        filename         = filename,
         model            = model,
         parameters       = parameters,
         conditions       = conditions,
@@ -350,12 +351,13 @@ _initial_solve(petab, model_size) = _get_sols(petab, _get_theta0(petab), _get_od
 
 # Simulate every condition at theta, sols[cidx] and sols_ss[ssidx]
 function _get_sols(petab, theta, solver)
-    sols_ss = _get_sols_ss(petab, theta, solver)
+    template = _get_template(petab, theta)
+    sols_ss = _get_sols_ss(petab, theta, solver, template)
     _is_steadystate(petab) && return nothing, sols_ss
     t_stops = _get_t_stops(petab)
     sols = [
         _solve(
-            _get_odeproblem(petab, theta, cidx, sols_ss, t_stops), 
+            _get_odeproblem(petab, theta, cidx, sols_ss, t_stops, template), 
             solver; 
             callback = petab.model.callbacks,
             tstops = t_stops[cidx]
@@ -393,29 +395,52 @@ function _get_t_stops(petab)
     return t_stops
 end
 
-# ODEProblem of simulation condition cidx at theta0
-function _get_odeproblem(petab, theta0, cidx, sols_ss, t_stops)
-    ssidx = petab.preeq_idxs[cidx]
-    zss = ssidx == 0 ? nothing : sols_ss[ssidx].u[end]
-    op = _get_op(petab, theta0, petab.conditions[cidx], zss)
-    return ODE.ODEProblem(petab.model.sys, op, (0.0, t_stops[cidx][end]); build_initializeprob = false)
+# ODEProblem built once and remade per condition, sparse analytic Jacobian on large models
+function _get_template(petab, theta)
+    op = _get_op(petab, theta, petab.conditions[1], nothing)
+    sparse = _get_model_size(petab) == :large
+    return ODE.ODEProblem(petab.model.sys, op, (0.0, 1.0); build_initializeprob = false, jac = sparse, sparse)
 end
 
-# Pre-equilibration steady-state simulations
-function _get_sols_ss(petab, theta0, solver)
+# Template at the operating point op of one condition
+function _remake(petab, template, op, tspan)
+    states = Set(MTK.unknowns(petab.model.sys))
+    u0 = Dict(symbol => value for (symbol, value) in op if symbol in states)
+    p = Dict(symbol => value for (symbol, value) in op if !(symbol in states))
+    return ODE.SciMLBase.remake(template; u0, p, tspan)
+end
+
+# ODEProblem of simulation condition cidx at theta0
+function _get_odeproblem(petab, theta0, cidx, sols_ss, t_stops, template)
+    ssidx = petab.preeq_idxs[cidx]
+    zss = ssidx == 0 ? nothing : sols_ss[ssidx]
+    op = _get_op(petab, theta0, petab.conditions[cidx], zss)
+    return _remake(petab, template, op, (0.0, t_stops[cidx][end]))
+end
+
+# Pre-equilibration steady states zss[ssidx], on the workers when there are any
+function _get_sols_ss(petab, theta0, solver, template)
+    Nss = length(petab.preeq_conditions)
+    Distributed.nworkers() > 1 && return Distributed.pmap(ssidx -> _solve_ss(petab.filename, theta0, ssidx), 1:Nss)
     return [
         _solve_steadystate(
             petab,
-            ODE.ODEProblem(
-                petab.model.sys,
-                _get_op(petab, theta0, condition, nothing),
-                (0.0, Inf);
-                build_initializeprob = false
-            ),
+            _remake(petab, template, _get_op(petab, theta0, petab.preeq_conditions[ssidx], nothing), (0.0, Inf)),
             solver
-        )
-        for condition in petab.preeq_conditions
+        ).u[end]
+        for ssidx in 1:Nss
     ]
+end
+
+# Steady state of pre-equilibration condition ssidx on a worker, the parsed problem cached by filename
+const _WORKER_PROBLEMS = Dict{String, Any}()
+function _solve_ss(filename, theta, ssidx)
+    petab, template, solver = get!(_WORKER_PROBLEMS, filename) do
+        petab = _parse_yaml(filename)
+        petab, _get_template(petab, theta), _get_odesolver(_get_model_size(petab))
+    end
+    prob = _remake(petab, template, _get_op(petab, theta, petab.preeq_conditions[ssidx], nothing), (0.0, Inf))
+    return _solve_steadystate(petab, prob, solver).u[end]
 end
 
 # PEtab.jl's steady state by simulation
@@ -522,8 +547,6 @@ function _get_z0(sols, nodes, K)
 end
 
 _get_z0(sols::Nothing, nodes, K) = zeros(0, 0, 0, 0)
-
-_get_zss0(sols_ss) = Vector{Float64}[sol.u[end] for sol in sols_ss]
 
 # Condition targets that some condition sets to an unknown parameter
 function _get_cv_ids(petab)

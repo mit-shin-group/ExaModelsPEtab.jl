@@ -4,20 +4,24 @@ version = "0.1.0"
 authors = ["Joseph Choi <jsphchoi@mit.edu>"]
 
 [deps]
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 ExaModels = "1037b233-b668-4ce9-9b63-f9f681f55dd2"
 ExaModelsCollocation = "806a8761-d632-41d1-aec4-b1285f27c7c5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ModelingToolkitBase = "7771a370-6774-4173-bd38-47e70ca0b839"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 SBMLImporter = "210efffb-c3c8-456d-a807-6f55560b12fe"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
 [compat]
+Distributed = "1"
 ExaModels = "0.12"
 ExaModelsCollocation = "0.1"
 LinearAlgebra = "1"
 ModelingToolkitBase = "1"
 OrdinaryDiffEq = "7"
 SBMLImporter = "4.1.1"
+SparseArrays = "1"
 Symbolics = "7"
 julia = "1.11"

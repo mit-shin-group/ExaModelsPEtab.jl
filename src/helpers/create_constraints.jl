@@ -24,6 +24,7 @@ function _create_collocation_constraints(
     # Unpack variables and model functions
     z, theta, cv = core.z, core.theta, core.cv
     Nz, Nc, N, K = _get_Nz(PEinfo), _get_Nc(PEinfo), core.N, core.K
+    Ntheta, Ncv = _get_Ntheta(PEinfo), _get_Ncv(PEinfo)
 
     # One kernel per term form of the right-hand sides when that is fewer than one per state
     forms, arguments = _analyze_rhs(core, PEinfo)
@@ -65,7 +66,7 @@ function _create_collocation_constraints(
         f = _get_f(PEinfo) # get RHS functions f[v](theta,z,cv,cvfixed,u,t)
         for v in 1:_get_Nz(PEinfo)
             EMC.@add_con_collocation(core, z[v,m],
-                f[v](theta[:], z[:,m,i,k], cv[:,m], cvfixed_m, u_mi, t)
+                f[v](_colonindex(theta, Ntheta), _colonindex(z, Nz, m, i, k), _colonindex(cv, Ncv, m), cvfixed_m, u_mi, t)
                 for (m, cvfixed_m, u_mi, i, k) in itr
             )
         end
@@ -85,7 +86,6 @@ function _create_ic_constraints(
     # Unpack variables
     z, theta, cv = core.z, core.theta, core.cv
 
-    # TODO (REVIEW) Create zsum, read by the fzic kernels below and by the observables
     core = _create_zsum(core, PEinfo)
 
     # Parse z(t=0) = ???
@@ -130,7 +130,6 @@ function _create_ic_constraints(
     end
 
     # Create constraints for z(t=0) = fzic
-    # TODO (REVIEW) base rows z(t=0) minus the terms of fzic with its sums bound to zsum, one kernel per term form
     isempty(itr_fzic) && return core
     index, zsum_sym = _get_zsum_index(_get_zsum_keys(PEinfo, arguments))
     items = [
@@ -146,7 +145,7 @@ function _create_ic_constraints(
     return core
 end
 
-# TODO (REVIEW) Rows (v, cidx) of z(t=0) by kind: (fixed value, cv, theta, zss, fzic)
+# Rows (v, cidx) of z(t=0) by kind: (fixed value, cv, theta, zss, fzic)
 function _get_ic_rows(PEinfo, arguments, zic_sym)
     cvfixed = _get_cvfixed(PEinfo, PEinfo.conditions)
     scales = [parameter.scale for parameter in PEinfo.parameters if parameter.estimate]
@@ -173,7 +172,7 @@ function _get_ic_rows(PEinfo, arguments, zic_sym)
     return itr_fixed, itr_cv, itr_theta, itr_zss, itr_fzic
 end
 
-# TODO (REVIEW) (expr, point) of the fzic initial conditions, z(t=0) = fzic(...) at point (cidx, 1, 0)
+# (expr, point) of the fzic initial conditions, z(t=0) = fzic(...) at point (cidx, 1, 0)
 function _get_ic_items(PEinfo, arguments)
     zic_sym = _get_zic_sym(PEinfo, arguments)
     itr_fzic = last(_get_ic_rows(PEinfo, arguments, zic_sym))
@@ -225,6 +224,9 @@ function _create_cv_constraints(
 end
 
 # ----- helper functinos -----
+
+# TODO can remove and replace once colon-indexing pushed
+_colonindex(x, n, idxs...) = ntuple(q -> x[q, idxs...], n)
 
 # cv[:,cidx] as a tuple, or () without cv
 # Symbolic arguments (theta, z, cv, cvfixed, u, t) of the model functions
@@ -397,7 +399,7 @@ function _analyze_rhs(core, PEinfo)
     return forms, (arguments.theta, slots.z, slots.cv, slots.m, slots.i, slots.k, slots.js, slots.vs, slots.cvidxs, slots.data, arguments.t)
 end
 
-# TODO (REVIEW) Top-level + terms of every right-hand side, [(v, term)] over the arguments
+# Top-level + terms of every right-hand side, [(v, term)] over the arguments
 function _get_rhs_terms(PEinfo, arguments)
     rules = _get_substitutions(PEinfo, arguments)
     return [
@@ -407,7 +409,7 @@ function _get_rhs_terms(PEinfo, arguments)
     ]
 end
 
-# TODO (REVIEW) Terms grouped by form: [(expr, [(v, js, vs, cvidxs, data)])] with data[point] resolved at every point
+# Terms grouped by form: [(expr, [(v, js, vs, cvidxs, data)])] with data[point] resolved at every point
 function _get_forms(terms, arguments, slots, cvfixed, u, points)
     exprs, occurrences = Dict{String, Any}(), []
     for (v, term) in terms
@@ -520,7 +522,7 @@ _get_data(leaf, cvfixed, u, m, i) = Float64(
     throw(ArgumentError("unsupported leaf $(leaf[1]) in a right-hand side"))
 )
 
-# TODO (REVIEW) Value of a data leaf at the steady state of pre-equilibration condition ssidx
+# Value of a data leaf at the steady state of pre-equilibration condition ssidx
 _get_data(leaf, cvfixed, u, ssidx) = Float64(
     leaf[1] === :data    ? leaf[2] :
     leaf[1] === :cvfixed ? cvfixed[leaf[2],ssidx] :

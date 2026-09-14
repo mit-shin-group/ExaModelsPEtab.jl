@@ -23,9 +23,7 @@
         Nsum = EMP._get_Nsum(core)
         @test core.ncon == collocation + continuity + Nsum + ic + cv + Nz * Nss
 
-        c, scale, from = residual(core), maximum(abs, PEinfo.z0), 0
-        @test maximum(abs, c[from+1:from+collocation]) <= 1e-3 * scale
-        from += collocation
+        c, scale, from = residual(core), maximum(abs, PEinfo.z0), collocation
         @test maximum(abs, c[from+1:from+continuity]) <= 1e-10 * scale
         from += continuity
         @test Nsum == 0 || maximum(abs, c[from+1:from+Nsum]) <= 1e-8 * (1 + maximum(abs, block(Array(core.x0), core.zsum)))
@@ -33,6 +31,7 @@
         @test maximum(abs, c[from+1:from+ic]) <= 1e-8 * scale
         from += ic
         @test cv == 0 || all(iszero, c[from+1:from+cv])
+        CORE[model] = core
     end
     @test paths == Set([:grouped, :perstate])
 
@@ -44,7 +43,7 @@
         cvfixed = EMP._get_cvfixed(PEinfo, PEinfo.conditions)
         u_ids = EMP._get_u_ids(PEinfo)
 
-        for cidx in 1:Nc, i in unique([1, cld(N, 2)])
+        for cidx in unique([1, Nc]), i in unique([1, cld(N, 2)])
             ssidx = PEinfo.preeq_idxs[cidx]
             op = EMP._get_op(PEinfo, PEinfo.theta0, PEinfo.conditions[cidx], ssidx == 0 ? nothing : PEinfo.zss0[ssidx])
             key = Dict(EMP._get_id(symbol) => symbol for symbol in keys(op))

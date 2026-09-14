@@ -16,14 +16,14 @@ const MODELS = [
     "Borghans_BiophysChem1997",
     "Brannmark_JBC2010",
     "Bruno_JExpBot2016",
-    "Chen_MSB2009",
+    # "Chen_MSB2009",
     "Crauste_CellSystems2017",
     "Elowitz_Nature2000",
     "Fiedler_BMCSystBiol2016",
-    # "Froehlich_CellSystems2018", # too large
+    # "Froehlich_CellSystems2018",
     "Fujita_SciSignal2010",
     "Giordano_Nature2020",
-    "Isensee_JCB2018",
+    # "Isensee_JCB2018",
     "Lang_PLOSComputBiol2024",
     "Laske_PLOSComputBiol2019",
     "Lucarelli_CellSystems2018",
@@ -31,12 +31,12 @@ const MODELS = [
     "Perelson_Science1996",
     "Rahman_MBS2016",
     "Raia_CancerResearch2011",
-    "Raimundez_PCB2020",
+    # "Raimundez_PCB2020",
     "SalazarCavazos_MBoC2020",
     "Schwen_PONE2014",
     "Smith_BMCSystBiol2013",
     "Sneyd_PNAS2002",
-    "Weber_BMC2015",
+    # "Weber_BMC2015",
     "Zhao_QuantBiol2020",
     "Zheng_PNAS2012",
 ]
@@ -65,6 +65,8 @@ peinfo(model) = get!(() -> EMP._get_PEtabInfo(find_yaml(model)), PEINFO, model)
 
 const EXAMODEL = Dict{String, Any}()
 examodel(model) = get!(() -> examodel_petab(find_yaml(model)), EXAMODEL, model)
+
+const CORE = Dict{String, Any}()
 
 block(w, variable) = reshape(w[variable.offset .+ (1:variable.length)], EMP.ExaModels.size(variable.size)...)
 

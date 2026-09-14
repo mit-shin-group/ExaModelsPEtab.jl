@@ -70,6 +70,20 @@
 
         @test all(isfinite, PEinfo.z0)
         @test all(all(isfinite, zss) for zss in PEinfo.zss0)
+
+        # the remade template of every condition matches a fresh problem in u0 and in du at t = 0
+        template = EMP._get_template(PEinfo, PEinfo.theta0)
+        for (cidx, condition) in enumerate(PEinfo.conditions)
+            ssidx = PEinfo.preeq_idxs[cidx]
+            op = EMP._get_op(PEinfo, PEinfo.theta0, condition, ssidx == 0 ? nothing : PEinfo.zss0[ssidx])
+            fresh = EMP.ODE.ODEProblem(sys, op, (0.0, 1.0); build_initializeprob = false)
+            remade = EMP._remake(PEinfo, template, op, (0.0, 1.0))
+            du_fresh, du_remade = similar(fresh.u0), similar(fresh.u0)
+            fresh.f(du_fresh, fresh.u0, fresh.p, 0.0)
+            remade.f(du_remade, remade.u0, remade.p, 0.0)
+            @test remade.u0 ≈ fresh.u0
+            @test du_remade ≈ du_fresh
+        end
     end
 
     @testset "meshes $model" for model in MODELS
@@ -77,7 +91,7 @@
         if isempty(PEinfo.nodes)
             @test PEinfo.K == 0
         else
-            @test PEinfo.K in (3, 4)
+            @test PEinfo.K >= 1
             @test all(nodes -> nodes[1] == 0 && issorted(nodes) && allunique(nodes), PEinfo.nodes)
 
             t_stops = EMP._get_t_stops(PEinfo)

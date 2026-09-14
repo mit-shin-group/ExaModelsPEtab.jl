@@ -39,7 +39,7 @@ function _evaluate_objective(
     nllh = 0.0
     for (m, measurement) in enumerate(petab.measurements)
         cidx, transform = measurement.cidx, _get_transform(petab, m)
-        z = isinf(measurement.time) ? sols_ss[petab.preeq_idxs[cidx]].u[end] : sols[cidx](measurement.time)
+        z = isinf(measurement.time) ? sols_ss[petab.preeq_idxs[cidx]] : sols[cidx](measurement.time)
         fy = get!(() -> _get_fy(exprs[m], arguments), fys, exprs[m])
         fsigma = get!(() -> _get_fsigma(sigmas[m], arguments, yvalue), fsigmas, sigmas[m])
         y = fy(theta, z, cv[:,cidx], cvfixed[:,cidx])

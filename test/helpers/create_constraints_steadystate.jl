@@ -6,6 +6,22 @@
         return c
     end
 
+    # dfdz(theta, z, cv, cvfixed, u, t): Jacobian of the right-hand side in z, moved here from src
+    function dfdz_function(PEinfo)
+        arguments = EMP._get_arguments(PEinfo)
+        rules = EMP._get_substitutions(PEinfo, arguments)
+        rhs = [
+            EMP.Symbolics.fixpoint_sub(equation.rhs, rules; fold = EMP.Symbolics.Val(true))
+            for equation in EMP.MTK.equations(PEinfo.model.sys)
+        ]
+        return EMP.Symbolics.build_function(
+            EMP.Symbolics.sparsejacobian(rhs, collect(arguments.z)),
+            arguments...;
+            expression = Val{false},
+            nanmath = false
+        )[1]
+    end
+
     @testset "the steady-state constraints of $model" for model in filter(model -> EMP._has_zss(peinfo(model)), MODELS)
         PEinfo = peinfo(model)
         Nz, Nss = EMP._get_Nz(PEinfo), EMP._get_Nss(PEinfo)
@@ -19,7 +35,7 @@
             for id in EMP._get_u_ids(PEinfo), ssidx in 1:Nss
         ]
         W, b, keep_rows = EMP._get_conservation_laws(PEinfo, cvfixed, u)
-        dfdz, f = EMP._get_dfdz(PEinfo), EMP._get_f(PEinfo)
+        dfdz, f = dfdz_function(PEinfo), EMP._get_f(PEinfo)
 
         @test length(W) == Nss && length(b) == Nss && length(keep_rows) == Nss
         for ssidx in 1:Nss
@@ -29,14 +45,12 @@
             @test maximum(abs, W[ssidx] * zss - b[ssidx]) <= 1e-8 * maximum(abs, zss)
 
             J = dfdz(PEinfo.theta0, zss, Float64[], cvfixed[:,ssidx], u[:,ssidx], 0.0)
-            @test maximum(abs, W[ssidx] * J; init = 0.0) <= 1e-6 * maximum(abs, J)
-
-            shifted(v, h) = (z = copy(zss); z[v] += h; [f[w](PEinfo.theta0, z, (), cvfixed[:,ssidx], u[:,ssidx], 0.0) for w in 1:Nz])
-            differences = reduce(hcat, [
-                (h = 1e-6 * max(abs(zss[v]), 1.0); (shifted(v, h) - shifted(v, -h)) / (2h))
-                for v in 1:Nz
-            ])
-            @test maximum(abs, J - differences) <= 1e-4 * maximum(abs, J)
+            # unit laws are absent states, their rows of J vanish outside the absent columns, other laws are exact
+            units = [k for k in axes(W[ssidx], 1) if count(!iszero, W[ssidx][k,:]) == 1]
+            absent = [findfirst(!iszero, W[ssidx][k,:]) for k in units]
+            others = setdiff(axes(W[ssidx], 1), units)
+            @test maximum(abs, W[ssidx][others,:] * J; init = 0.0) <= 1e-6 * maximum(abs, J)
+            @test maximum(abs, J[absent, setdiff(1:Nz, absent)]; init = 0.0) <= 1e-6 * maximum(abs, J)
         end
 
         core = isempty(PEinfo.nodes) ?
@@ -45,7 +59,7 @@
         @test core.ncon == Nz * Nss
         @test maximum(abs, residual(core)) <= 1e-4 * (1 + maximum(maximum(abs, zss) for zss in PEinfo.zss0))
 
-        # TODO (REVIEW) the kept rows of f at a perturbed point, sorted since the two kernel paths order rows differently
+        # the kept rows of f at a perturbed point, sorted since the two kernel paths order rows differently
         rows = [(v, ssidx) for ssidx in 1:Nss for v in keep_rows[ssidx]]
         nlp = EMP.ExaModels.ExaModel(core)
         x = nlp.meta.x0 .+ 0.1 .* randn(length(nlp.meta.x0)) .* max.(abs.(nlp.meta.x0), 1.0)

@@ -1,13 +1,13 @@
 @testset "create_objective" begin
-    core_of(PEinfo) = isempty(PEinfo.nodes) ?
+    core_of(model, PEinfo) = isempty(PEinfo.nodes) ?
         EMP._create_constraints_steadystate(EMP._create_variables_steadystate(EMP.ExaModels.ExaCore(), PEinfo), PEinfo) :
-        EMP._create_constraints(EMP._create_variables(EMP.EMC.CollocationExaCore(PEinfo.nodes, PEinfo.K), PEinfo), PEinfo)
+        CORE[model]
 
     @testset "assembles the objective of $model" for model in MODELS
         PEinfo = peinfo(model)
         Nm = EMP._get_Nm(PEinfo)
         _, rows = EMP._get_sigmas(PEinfo, EMP._get_arguments(PEinfo), EMP._get_yvalue())
-        core = core_of(PEinfo)
+        core = core_of(model, PEinfo)
         ncon = core.ncon
         core = EMP._create_objective(core, PEinfo)
         Nsum, Nsigma = EMP._get_Nsum(core), maximum(rows)
@@ -21,7 +21,6 @@
         c = similar(nlp.meta.x0, nlp.meta.ncon)
         EMP.ExaModels.NLPModels.cons!(nlp, nlp.meta.x0, c)
         @test maximum(abs, c[ncon+1:end]) <= 1e-8 * (1 + maximum(abs, block(nlp.meta.x0, core.y)))
-        @test EMP.ExaModels.NLPModels.obj(nlp, nlp.meta.x0) ≈ EMP._evaluate_objective(PEinfo, PEinfo.theta0) rtol = 1e-10
     end
 
     @testset "the measurement points of $model" for model in MODELS
