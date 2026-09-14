@@ -4,3 +4,6 @@ ExaModels = "1037b233-b668-4ce9-9b63-f9f681f55dd2"
 ExaModelsPEtab = "449f6601-3844-48f4-990d-d57d890903df"
 MadNLP = "2621e9c9-9eb4-46b1-8089-e8c72242dfb6"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+CUDA = "6.4.0"
