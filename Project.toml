@@ -17,7 +17,7 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 [compat]
 Distributed = "1"
 ExaModels = "0.12"
-ExaModelsCollocation = "0.1"
+ExaModelsCollocation = "0.1, 0.2"
 LinearAlgebra = "1"
 ModelingToolkitBase = "1"
 OrdinaryDiffEq = "7"
